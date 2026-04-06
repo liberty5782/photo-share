@@ -1,0 +1,21 @@
+# Server
+server/uploads/*
+!server/uploads/.gitkeep
+server/photo_share.db
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+*.iml
+.idea/
+
+# General
+.env
+*.db-journal
+.DS_Store

@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./photo_share.db:/app/photo_share.db
+    restart: unless-stopped
