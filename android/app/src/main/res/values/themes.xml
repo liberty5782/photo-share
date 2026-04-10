@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Base application theme (Compose manages most styling; this just satisfies the manifest reference) -->
-    <style name="Theme.PhotoShare" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.PhotoShare" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:statusBarColor">#121212</item>
+        <item name="android:navigationBarColor">#121212</item>
+    </style>
 </resources>

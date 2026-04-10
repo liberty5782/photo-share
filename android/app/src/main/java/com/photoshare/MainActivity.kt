@@ -1,11 +1,15 @@
 package com.photoshare
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -13,7 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -24,32 +27,30 @@ import com.photoshare.ui.gallery.GalleryScreen
 import com.photoshare.ui.setup.SetupScreen
 import com.photoshare.ui.theme.PhotoShareTheme
 import com.photoshare.ui.upload.UploadScreen
+import com.photoshare.util.AppPrefs
 import com.photoshare.util.PreferencesManager
 import java.util.UUID
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
-    private var pendingShareUri: Uri? = null
+    private val shareUri = mutableStateOf<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        pendingShareUri = extractShareUri(intent)
+        shareUri.value = extractShareUri(intent)
 
         setContent {
             PhotoShareTheme {
-                AppRoot(initialShareUri = pendingShareUri)
+                AppRoot(shareUri = shareUri)
             }
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Handle share intents when app is already running
-        extractShareUri(intent)?.let { uri ->
-            pendingShareUri = uri
-        }
+        shareUri.value = extractShareUri(intent)
     }
 
     private fun extractShareUri(intent: Intent?): Uri? {
@@ -67,21 +68,23 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AppRoot(initialShareUri: Uri?) {
+private fun AppRoot(shareUri: MutableState<Uri?>) {
     val context = LocalContext.current
     val prefs = remember { PreferencesManager(context) }
     val scope = rememberCoroutineScope()
 
-    val appPrefs by prefs.appPrefs.collectAsStateWithLifecycle(initialValue = null)
-    // null = still loading; non-null AppPrefs = configured; explicit "unset" = show setup
+    // Use collect{} so prefsLoaded=true only fires after the real DataStore read,
+    // not on the null initialValue that collectAsStateWithLifecycle starts with.
+    var appPrefs by remember { mutableStateOf<AppPrefs?>(null) }
     var prefsLoaded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(appPrefs) {
-        prefsLoaded = true
-        appPrefs?.let { p ->
-            if (!ApiClient.isInitialized()) {
+    LaunchedEffect(Unit) {
+        prefs.appPrefs.collect { p ->
+            if (p != null && !ApiClient.isInitialized()) {
                 ApiClient.init(p.serverUrl, p.deviceId, p.deviceName, context)
             }
+            appPrefs = p
+            prefsLoaded = true
         }
     }
 
@@ -92,11 +95,40 @@ private fun AppRoot(initialShareUri: Uri?) {
         return
     }
 
+    // Capture once — must not change, or NavHost resets its graph on recomposition
+    val initialUri = remember { shareUri.value }
+    val startDestination = remember {
+        when {
+            appPrefs == null -> "setup"
+            initialUri != null -> "upload"
+            else -> "gallery"
+        }
+    }
+    // Request notification permission on Android 13+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val permissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) {}
+        LaunchedEffect(Unit) {
+            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val navController = rememberNavController()
+
+    // Navigate to upload when a share intent arrives while the app is already running
+    LaunchedEffect(shareUri.value) {
+        val uri = shareUri.value
+        if (uri != null && appPrefs != null) {
+            navController.navigate("upload?uri=${Uri.encode(uri.toString())}") {
+                launchSingleTop = true
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
-        startDestination = if (appPrefs != null) "gallery" else "setup",
+        startDestination = startDestination,
     ) {
         composable("setup") {
             var isSaving by remember { mutableStateOf(false) }
@@ -134,7 +166,17 @@ private fun AppRoot(initialShareUri: Uri?) {
             GalleryScreen(
                 serverUrl = currentPrefs.serverUrl,
                 deviceName = currentPrefs.deviceName,
+                deviceId = currentPrefs.deviceId,
                 onUploadClick = { navController.navigate("upload") },
+                onChangeServer = {
+                    scope.launch {
+                        prefs.clear()
+                        ApiClient.reset()
+                        navController.navigate("setup") {
+                            popUpTo("gallery") { inclusive = true }
+                        }
+                    }
+                },
             )
         }
 
@@ -147,15 +189,27 @@ private fun AppRoot(initialShareUri: Uri?) {
             }),
         ) { backStack ->
             val uriString = backStack.arguments?.getString("uri")
-                ?: initialShareUri?.toString()
+                ?: initialUri?.toString()
             val uri = uriString?.let { Uri.parse(it) }
+
+            LaunchedEffect(Unit) { shareUri.value = null }
 
             UploadScreen(
                 preloadedUri = uri,
                 onUploadSuccess = {
-                    navController.popBackStack()
+                    if (!navController.popBackStack()) {
+                        navController.navigate("gallery") {
+                            popUpTo("upload") { inclusive = true }
+                        }
+                    }
                 },
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate("gallery") {
+                            popUpTo("upload") { inclusive = true }
+                        }
+                    }
+                },
             )
         }
     }

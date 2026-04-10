@@ -23,6 +23,12 @@ object ApiClient {
 
     fun isInitialized() = _api != null
 
+    fun reset() {
+        _api = null
+        _imageLoader = null
+        _okHttpClient = null
+    }
+
     fun init(serverUrl: String, deviceId: String, deviceName: String, context: Context) {
         val logger = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC

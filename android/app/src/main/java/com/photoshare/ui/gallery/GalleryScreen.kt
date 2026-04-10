@@ -7,10 +7,14 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoDelete
 import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -23,8 +27,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
@@ -32,11 +37,14 @@ import coil.request.ImageRequest
 import com.photoshare.data.api.ApiClient
 import com.photoshare.data.model.Photo
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(
     serverUrl: String,
     deviceName: String,
+    deviceId: String,
     onUploadClick: () -> Unit,
+    onChangeServer: () -> Unit,
     vm: GalleryViewModel = viewModel(),
 ) {
     val photos by vm.photos.collectAsState()
@@ -45,6 +53,8 @@ fun GalleryScreen(
     val viewedEphemeral by vm.viewedEphemeral.collectAsState()
 
     var fullscreenPhoto by remember { mutableStateOf<Photo?>(null) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showConfirmDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -52,7 +62,24 @@ fun GalleryScreen(
                 title = { Text("PhotoShare") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
-                )
+                ),
+                actions = {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Change server") },
+                            onClick = {
+                                showMenu = false
+                                showConfirmDialog = true
+                            },
+                        )
+                    }
+                },
             )
         },
         floatingActionButton = {
@@ -107,6 +134,23 @@ fun GalleryScreen(
         }
     }
 
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            title = { Text("Change server?") },
+            text = { Text("This will disconnect from the current server and return to setup.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirmDialog = false
+                    onChangeServer()
+                }) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     // Full-screen viewer
     fullscreenPhoto?.let { photo ->
         val alreadyViewed = photo.id in viewedEphemeral
@@ -115,6 +159,7 @@ fun GalleryScreen(
             serverUrl = serverUrl,
             alreadyViewed = alreadyViewed,
             deviceName = deviceName,
+            canDelete = photo.uploaderId == deviceId,
             onDismiss = { fullscreenPhoto = null },
             onDelete = {
                 vm.deletePhoto(photo.id)
@@ -228,73 +273,123 @@ private fun FullscreenPhotoDialog(
     serverUrl: String,
     alreadyViewed: Boolean,
     deviceName: String,
+    canDelete: Boolean,
     onDismiss: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val context = LocalContext.current
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        },
-        dismissButton = {
-            // Only uploader can delete
-            TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-        },
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (photo.isEphemeral) {
-                    Icon(Icons.Default.AutoDelete, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            // Photo
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data("$serverUrl/photos/${photo.id}/file")
+                    .crossfade(true)
+                    .build(),
+                imageLoader = ApiClient.imageLoader,
+                contentDescription = photo.caption,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                when (painter.state) {
+                    is AsyncImagePainter.State.Loading -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator() }
+                    is AsyncImagePainter.State.Error -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("Failed to load image", color = Color.White) }
+                    else -> SubcomposeAsyncImageContent()
                 }
-                Text(photo.uploaderName ?: "Photo", style = MaterialTheme.typography.titleMedium)
             }
-        },
-        text = {
-            Column {
-                SubcomposeAsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data("$serverUrl/photos/${photo.id}/file")
-                        .crossfade(true)
-                        .build(),
-                    imageLoader = ApiClient.imageLoader,
-                    contentDescription = photo.caption,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(8.dp)),
+
+            // Top bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.4f))
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                    .align(Alignment.TopCenter),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Close", tint = Color.White)
+                }
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    when (painter.state) {
-                        is AsyncImagePainter.State.Loading -> Box(
-                            Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) { CircularProgressIndicator() }
-                        is AsyncImagePainter.State.Error -> Box(
-                            Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) { Text("Failed to load image") }
-                        else -> SubcomposeAsyncImageContent()
+                    if (photo.isEphemeral) {
+                        Icon(
+                            Icons.Default.AutoDelete,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
                     }
-                }
-
-                photo.caption?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
-                }
-
-                if (photo.isEphemeral) {
-                    Spacer(Modifier.height(6.dp))
                     Text(
-                        "This photo disappears after viewing",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                        photo.uploaderName ?: "Photo",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
                     )
                 }
+                if (canDelete) {
+                    IconButton(onClick = { showDeleteConfirm = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
-        },
-    )
+
+            // Bottom caption
+            val caption = photo.caption?.takeIf { it.isNotBlank() }
+            val showBottom = caption != null || photo.isEphemeral
+            if (showBottom) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .align(Alignment.BottomCenter),
+                ) {
+                    caption?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodyMedium) }
+                    if (photo.isEphemeral) {
+                        Text(
+                            "This photo disappears after viewing",
+                            color = Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete photo?") },
+            text = { Text("This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onDelete() }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable

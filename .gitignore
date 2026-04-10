@@ -12,6 +12,8 @@ android/.gradle/
 android/local.properties
 android/app/build/
 android/build/
+android/gradle/wrapper/gradle-wrapper.jar
+android/**/*.hprof
 *.iml
 .idea/
 
@@ -19,3 +21,4 @@ android/build/
 .env
 *.db-journal
 .DS_Store
+Thumbs.db

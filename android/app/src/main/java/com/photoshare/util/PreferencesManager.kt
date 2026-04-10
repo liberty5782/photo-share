@@ -42,4 +42,8 @@ class PreferencesManager(private val context: Context) {
             prefs[SERVER_URL] = serverUrl.trimEnd('/')
         }
     }
+
+    suspend fun clear() {
+        context.dataStore.edit { it.clear() }
+    }
 }
